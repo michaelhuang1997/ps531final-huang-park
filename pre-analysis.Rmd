@@ -1,0 +1,440 @@
+---
+title: "pre-analysis"
+author: "Michael Huang"
+date: "2024-10-29"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+options(future.globals.maxSize = 8 * 1024^5)  # 3.5 GiB
+  # Set to 16 GB or a suitable size for your system
+
+```
+
+```{r}
+library(tidyverse)
+library(readxl)
+library(dplyr)
+library(knitr)
+library(kableExtra)
+library(stargazer)
+library(MASS)
+library(tidyverse)
+library(estimatr)
+library(DeclareDesign)
+library(RItools)
+library(optmatch)
+library(robustbase)
+library(splines)
+```
+
+#############
+#pew india
+##############
+```{r}
+df_pew <- read_excel("/Users/michaelhuang/Dropbox/University of Illinois Urbana-Champaign/Projects/besample/pew/Pew India Survey Dataset.XLSX")
+```
+
+```{r}
+head(df_pew)
+```
+
+
+```{r}
+var_list <- c("QRELSING",
+             "Q3132REC", 
+             "QAGEREC", 
+             "QGEN", 
+             "QINCINDREC", 
+             "QEDU", 
+             "REGION", 
+             "QCASTE", 
+             "URBAN", 
+             "Q2", # how often, if at all, do you follow the news?
+             "Q3REC_1", #television
+             "Q3REC_2", #newspaper or magazines
+             "Q3REC_3", #radio
+             "Q3REC_4", #internet
+             "Q3REC_5", #social media (facebook, twitter, whatsapp)
+             "Q3REC_6", #word of mouth, family, friends
+             "Q67A", #how proud are you to be an Indian?
+             "Q77AREC", #did you vote in the last national eleciton?
+             "Q69H", #how important do you think it is to be truly indian? to respect the country's institutions and laws
+             "Q10" #Some feel that we should rely on a democratic form of government to solve our country's problems. Others feel that we should rely on a leader with a strong hand to solve our country's problems. Which comes closer to your opinion? 
+             )
+```
+
+```{r}
+table(df_pew$QAGEREC)
+```
+
+
+```{r}
+df_subset <- df_pew[, var_list]
+```
+
+```{r}
+# Create a named vector for renaming
+new_names <- c(
+  "QRELSING" = "Religion",
+  "Q3132REC" = "Income",
+  "QAGEREC" = "Age",
+  "QGEN" = "Gender",
+  "QINCINDREC" = "IncomeIndicator",
+  "QEDU" = "Education",
+  "REGION" = "Region",
+  "QCASTE" = "Caste",
+  "URBAN" = "UrbanArea",
+  "Q2" = "NewsFrequency",
+  "Q3REC_1" = "Television",
+  "Q3REC_2" = "Newspapers",
+  "Q3REC_3" = "Radio",
+  "Q3REC_4" = "Internet",
+  "Q3REC_5" = "SocialMedia",
+  "Q3REC_6" = "WordOfMouth",
+  "Q67A" = "PrideInIndia",
+  "Q77AREC" = "VotedLastElection",
+  "Q69H" = "ImportanceToBeIndian",
+  "Q10" = "PreferredGovType"
+)
+
+# Rename columns in df_subset
+names(df_subset) <- ifelse(names(df_subset) %in% names(new_names), 
+                           new_names[names(df_subset)], 
+                           names(df_subset))
+
+# Verify the new column names
+names(df_subset)
+
+```
+
+```{r}
+df_subset
+```
+
+```{r}
+#getting rid of NAs and Don't knows and Refuse to answer
+# Define a vector of values to remove
+values_to_remove <- c(96, 99, 98, 998, 999)
+
+# Remove rows with NAs or unwanted values
+df_subset_cleaned <- df_subset[!apply(df_subset, 1, function(row) {
+  any(is.na(row) | row %in% values_to_remove)
+}), ]
+
+head(df_subset_cleaned)
+
+```
+
+
+
+
+
+```{r}
+# Create frequency tables for each variable
+freq_summary <- lapply(var_list, function(var) {
+  freq_table <- table(df_subset_cleaned[[var]], useNA = "ifany") # Include NA counts
+  
+  # Handle variables with no valid data
+  if (length(freq_table) == 0) {
+    return(data.frame(Variable = var, Category = NA, Frequency = NA, Percentage = NA))
+  }
+  
+  # Calculate percentages
+  percent_table <- prop.table(freq_table) * 100
+  
+  # Return a data frame with results
+  data.frame(Variable = var, 
+             Category = names(freq_table),
+             Frequency = as.integer(freq_table),
+             Percentage = round(percent_table, 2))
+})
+
+# Combine all summaries into one table
+summary_combined <- do.call(rbind, freq_summary)
+
+
+# Display the table
+kable(summary_combined, 
+      format = "html", 
+      caption = "Frequencies and Percentages of Categorical Variables") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+
+
+
+#################################################
+# basic regression exploration
+################################################
+
+```{r}
+table(df_pew$Q10)
+class(df_pew$Q10)
+```
+
+
+```{r}
+# Step 1: Remove rows where Q10 is "98" or "99"
+df_pew <- df_pew[!df_pew$Q10 %in% c("98", "99"), ]
+
+# Step 2: Convert Q10 to a binary categorical variable
+df_pew$Q10 <- factor(df_pew$Q10, levels = c("1", "2"), labels = c("Democratic", "StrongLeader"))
+
+```
+
+```{r}
+table(df_pew$QRELSING)
+class(df_pew$QRELSING)
+```
+
+```{r}
+# Convert QRELSING to a categorical variable
+df$QRELSING <- factor(df$QRELSING)
+
+```
+
+```{r}
+
+# Example: Define levels with labels
+df_pew$QRELSING <- factor(df_pew$QRELSING, 
+                      levels = c(1, 2, 3, 4, 5,6,7,8),      # Replace with actual numeric codes
+                      labels = c("Hindu", "Muslim", "Christian", "Sikh", "Buddhist", "Jain", "Others", "NoReligion")) # Replace with actual labels
+
+```
+
+```{r}
+table(df_pew$Q69H)
+```
+
+
+```{r}
+df_pew <- df_pew[!df_pew$Q69H %in% c("98", "99"), ]
+df_pew$Q69H <- factor(df_pew$Q69H, 
+                      levels = c(1, 2, 3, 4),      # Replace with actual numeric codes
+                      labels = c("VeryImptant", "SomeImptant", "NotVeryImptant", "NotImptant"))
+```
+
+```{r}
+#model <- glm(Q10 ~ QRELSING + QRELSING + Q3132REC +  QAGEREC + QGEN + QINCINDREC + QEDU + REGION + QCASTE + URBAN + Q2 + Q3REC_1 + Q3REC_2 + Q3REC_3 + Q3REC_4 + Q3REC_5 + Q3REC_6 + Q67A, data = df_pew, family = binomial)
+
+model <- glm(Q10 ~ QRELSING + REGION, data = df_pew, family = binomial)
+# View the summary of the model
+summary(model)
+
+```
+
+
+##############################################
+# matching
+##############################################
+
+
+```{r}
+# randomly select 10,000 data points due to memory constraints
+set.seed(123)
+
+# Randomly select 10,000 rows
+sampled_dat <- df_subset_cleaned[sample(nrow(df_subset_cleaned), 5000), ]
+
+```
+
+```{r}
+# create origid
+sampled_dat$origid <- seq_len(nrow(sampled_dat))
+
+```
+
+
+
+```{r create_mahal_dists}
+# Specify covariates
+ordinal_covs <- c("Income",         # ordinal
+                  "Age",            # ordinal
+                  "IncomeIndicator",# ordinal
+                  "Education",      # ordinal
+                  "NewsFrequency",  # ordinal
+                  "Television",     # ordinal
+                  "Newspapers",     # ordinal
+                  "Radio",          # ordinal
+                  "Internet",       # ordinal
+                  "SocialMedia",    # ordinal
+                  "WordOfMouth",    # ordinal
+                  "PrideInIndia")   # ordinal
+
+binary_covs <- c("Gender", "UrbanArea")  # binary
+
+categorical_covs <- c("Region", "Caste")  # categorical
+
+```
+
+
+```{r}
+# Select relevant subsets of data
+ordinal_covmat <- sampled_dat[, ordinal_covs, drop = FALSE]
+binary_covmat <- sampled_dat[, binary_covs, drop = FALSE]
+categorical_covmat <- sampled_dat[, categorical_covs, drop = FALSE]
+
+
+
+## Step 1: Compute Mahalanobis distances for ordinal variables
+ordinal_dist <- mahalanobis(
+  x = ordinal_covmat,
+  center = colMeans(ordinal_covmat, na.rm = TRUE),
+  cov = cov(ordinal_covmat, use = "complete.obs")
+)
+
+# Add distances to the dataset
+sampled_dat$ordinal_covmh <- ordinal_dist
+
+## Step 2: Match binary variables exactly
+# For binary variables, create a separate distance metric as 0 (match) or 1 (mismatch)
+binary_dist <- as.matrix(dist(binary_covmat, method = "euclidean"))
+sampled_dat$binary_covmh <- apply(binary_dist, 1, mean)
+
+## Step 3: Match categorical variables using dummy encoding or exact matching
+# Convert categorical variables to dummy variables for Mahalanobis distance
+dummy_categorical_covmat <- model.matrix(~ . - 1, data = categorical_covmat)
+categorical_dist <- mahalanobis(
+  x = dummy_categorical_covmat,
+  center = colMeans(dummy_categorical_covmat, na.rm = TRUE),
+  cov = cov(dummy_categorical_covmat, use = "complete.obs")
+)
+sampled_dat$categorical_covmh <- categorical_dist
+
+## Combine Mahalanobis distances
+# Weight different distances if needed
+sampled_dat$combined_covmh <- sampled_dat$ordinal_covmh + 
+                                    sampled_dat$binary_covmh + 
+                                    sampled_dat$categorical_covmh
+
+```
+
+```{r}
+## Step 4: Compute pairwise absolute distances (if needed)
+mhdist_mat <- outer(sampled_dat$combined_covmh, sampled_dat$combined_covmh, 
+                    FUN = function(x, y) { abs(x - y) })
+
+#chunk_size <- 1000  # Adjust based on available memory
+#n <- nrow(df_subset_cleaned)
+#dist_chunks <- matrix(0, nrow = n, ncol = n)
+
+#for (i in seq(1, n, by = chunk_size)) {
+  #for (j in seq(1, n, by = chunk_size)) {
+    # Define chunk ranges
+    #i_end <- min(i + chunk_size - 1, n)
+    #j_end <- min(j + chunk_size - 1, n)
+    
+    # Compute distances for this chunk
+    #dist_chunks[i:i_end, j:j_end] <- outer(
+      #df_subset_cleaned$combined_covmh[i:i_end], 
+      #df_subset_cleaned$combined_covmh[j:j_end], 
+      #FUN = function(x, y) { abs(x - y) }
+    #)
+  #}
+#}
+
+#mhdist_mat <- dist_chunks
+#all(is.na(mhdist_mat))
+```
+
+
+
+```{r}
+## Turns out that the designmatch software doesn't like too many decimals, and prefers
+## mean-centered distances. This doesn't really matter in substantive terms but is important in
+## regards to getting the software to work
+matchdist_mat <- round(mhdist_mat / mean(mhdist_mat), 2)
+
+## Don't allow any pairs that differ by more than 2 on HomRate03
+#nearlist <- list(covs=as.matrix(meddat$HomRate03),pairs=c(HomRate03=2))
+
+## For larger problems you will want to install gurobi using an academic
+## license. After installing the license, then I do something like the following
+## where the details of the version numbers will differ
+##install.packages("/Library/gurobi911/mac64/R/gurobi_9.1-1_R_4.0.2.tgz",repos=NULL)
+#3library(gurobi)
+#This specifies settings for the solver to be used during the matching process
+solverlist <- list(name = "highs", approximate = 1, t_max = 1000, trace = 1)
+
+#The function nmatch uses the adjusted distance matrix (matchdist_mat) and the specified constraints (nearlist) to find pairs of neighborhoods that are similar based on the Mahalanobis distance while respecting the HomRate03 difference limit.
+mh_pairs <- nmatch(
+  dist_mat = matchdist_mat,
+  #near = nearlist,
+  subset_weight = 1,
+  solver = solverlist
+)
+## look at raw mh_pairs output.
+## mh_pairs
+## Looks like neighborhood 6 is matched with neighborhood 1, etc..
+
+#' Function to convert the output of nmatch into a factor variable for use in analysis
+nmatch_to_df <- function(obj, origid) {
+## We want a factor that we can merge onto our
+## existing dataset. Here returning a data.frame so that
+## we can merge --- seems less error prone than using
+## rownames even if it is slower.
+    matchesdat <- data.frame(
+        bm = obj$group_id,
+        match_id = c(obj$id_1, obj$id_2)
+        )
+      matchesdat$id <- origid[matchesdat$match_id]
+      return(matchesdat)
+  }
+
+
+mh_pairs_df <- nmatch_to_df(mh_pairs,origid=sampled_dat$origid)
+nrow(mh_pairs_df)
+
+
+## So, in matched set 1 (bm==1) we see two neighborhoods:
+mh_pairs_df %>% filter(bm==1)
+mh_pairs_df$origid <- mh_pairs_df$id
+
+# The nmatch_to_df function creates a column labeled "bm" which contains
+sampled_dat2 <- inner_join(sampled_dat, mh_pairs_df, by = "origid")
+sampled_dat2 <- droplevels(sampled_dat2)
+stopifnot(nrow(sampled_dat2) == nrow(mh_pairs_df))
+
+## Number of matches:
+# meddat2$bm is the matched set indicator.
+stopifnot(length(unique(sampled_dat2$bm)) == nrow(sampled_dat2) / 2)
+nrow(mh_pairs_df)
+nrow(sampled_dat2)
+## Notice some observations were not matched (we only have 28 neighborhoods in meddat2 after the matching)
+nrow(sampled_dat2)
+```
+
+```{r}
+sampled_dat2$bmF <- factor(sampled_dat2$bm)
+
+pair_diffs <- sampled_dat2 %>% 
+    group_by(bmF) %>%
+    summarize(hr=mean(PreferredGovType),
+    hr_diff=PreferredGovType[Religion==1] - PreferredGovType[Religion==2],
+    hr_diff_raw=diff(PreferredGovType),.groups="drop")
+
+est1 <- mean(pair_diffs$hr_diff)
+est1
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
